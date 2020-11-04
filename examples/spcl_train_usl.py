@@ -135,6 +135,7 @@ def main_worker(args):
     features, _ = extract_features(model, cluster_loader, print_freq=50)
     features = torch.cat([features[f].unsqueeze(0) for f, _, _ in sorted(dataset.train)], 0)
     memory.features = F.normalize(features, dim=1).cuda()
+    # memory.features = features.cuda()
     del cluster_loader, features
 
     # Evaluator
@@ -269,9 +270,9 @@ def main_worker(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Self-paced contrastive learning on unsupervised re-ID")
     # data
-    parser.add_argument('-d', '--dataset', type=str, default='market1501',
+    parser.add_argument('-d', '--dataset', type=str, default='dukemtmc',
                         choices=datasets.names())
-    parser.add_argument('-b', '--batch-size', type=int, default=64)
+    parser.add_argument('-b', '--batch-size', type=int, default=32)
     parser.add_argument('-j', '--workers', type=int, default=4)
     parser.add_argument('--height', type=int, default=256, help="input height")
     parser.add_argument('--width', type=int, default=128, help="input width")
@@ -290,7 +291,7 @@ if __name__ == '__main__':
     parser.add_argument('--k2', type=int, default=6,
                         help="hyperparameter for jaccard distance")
     # model
-    parser.add_argument('-a', '--arch', type=str, default='resnet50',
+    parser.add_argument('-a', '--arch', type=str, default='resnet_ibn50a',
                         choices=models.names())
     parser.add_argument('--features', type=int, default=0)
     parser.add_argument('--dropout', type=float, default=0)
@@ -300,9 +301,9 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.00035,
                         help="learning rate")
     parser.add_argument('--weight-decay', type=float, default=5e-4)
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--iters', type=int, default=400)
-    parser.add_argument('--step-size', type=int, default=20)
+    parser.add_argument('--step-size', type=int, default=40)
     # training configs
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--print-freq', type=int, default=10)
@@ -314,5 +315,5 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir', type=str, metavar='PATH',
                         default=osp.join(working_dir, 'data'))
     parser.add_argument('--logs-dir', type=str, metavar='PATH',
-                        default=osp.join(working_dir, 'logs'))
+                        default=osp.join(working_dir, 'logs/spcl_usl/duke_resnet50-ibn_slot_attention_100_ep_w_gru_w_norm'))
     main()
