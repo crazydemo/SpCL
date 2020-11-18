@@ -20,7 +20,7 @@ import torch.nn.functional as F
 from spcl import datasets
 from spcl import models
 from spcl.models.hm import HybridMemory
-from spcl.trainers import SpCLTrainer_USL
+from spcl.trainers_two_branch import SpCLTrainer_USL
 from spcl.evaluators import Evaluator, extract_features
 from spcl.utils.data import IterLoader
 from spcl.utils.data import transforms as T
@@ -125,8 +125,10 @@ def main_worker(args):
     model = create_model(args)
 
     # Create hybrid memory
-    memory = HybridMemory(model.module.num_features, len(dataset.train),
+    memory1 = HybridMemory(model.module.num_features, len(dataset.train),
                             temp=args.temp, momentum=args.momentum).cuda()
+    memory2 = HybridMemory(model.module.num_features, len(dataset.train),
+                           temp=args.temp, momentum=args.momentum).cuda()
 
     # Initialize target-domain instance features
     print("==> Initialize instance features in the hybrid memory")
@@ -134,27 +136,33 @@ def main_worker(args):
                                     args.batch_size, args.workers, testset=sorted(dataset.train))
     features, _ = extract_features(model, cluster_loader, print_freq=50)
     features = torch.cat([features[f].unsqueeze(0) for f, _, _ in sorted(dataset.train)], 0)
-    memory.features = F.normalize(features, dim=1).cuda()
+    memory1.features = F.normalize(features[:, :2048], dim=1).cuda()
+    memory2.features = F.normalize(features[:, 2048:], dim=1).cuda()
     # memory.features = features.cuda()
     del cluster_loader, features
 
     # Evaluator
     evaluator = Evaluator(model)
 
+    # for name, value in model.named_parameters():
+    #     if 'slot' in name and value.requires_grad:
+    #         print(name)
     # Optimizer
     params = [{"params": [value]} for _, value in model.named_parameters() if value.requires_grad]
     optimizer = torch.optim.Adam(params, lr=args.lr, weight_decay=args.weight_decay)
     lr_scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=args.step_size, gamma=0.1)
 
     # Trainer
-    trainer = SpCLTrainer_USL(model, memory)
+    trainer = SpCLTrainer_USL(model, memory1, memory2)
 
     for epoch in range(args.epochs):
         # Calculate distance
         print('==> Create pseudo labels for unlabeled data with self-paced policy')
-        features = memory.features.clone()
-        rerank_dist = compute_jaccard_distance(features, k1=args.k1, k2=args.k2)
-        del features
+        features1 = memory1.features.clone()
+        features2 = memory2.features.clone()
+        rerank_dist1 = compute_jaccard_distance(features1, k1=args.k1, k2=args.k2)
+        rerank_dist2 = compute_jaccard_distance(features2, k1=args.k1, k2=args.k2)
+        del features1, features2
 
         if (epoch==0):
             # DBSCAN cluster
@@ -162,17 +170,31 @@ def main_worker(args):
             eps_tight = eps-args.eps_gap
             eps_loose = eps+args.eps_gap
             print('Clustering criterion: eps: {:.3f}, eps_tight: {:.3f}, eps_loose: {:.3f}'.format(eps, eps_tight, eps_loose))
-            cluster = DBSCAN(eps=eps, min_samples=4, metric='precomputed', n_jobs=-1)
-            cluster_tight = DBSCAN(eps=eps_tight, min_samples=4, metric='precomputed', n_jobs=-1)
-            cluster_loose = DBSCAN(eps=eps_loose, min_samples=4, metric='precomputed', n_jobs=-1)
+            cluster1 = DBSCAN(eps=eps, min_samples=4, metric='precomputed', n_jobs=-1)
+            cluster_tight1 = DBSCAN(eps=eps_tight, min_samples=4, metric='precomputed', n_jobs=-1)
+            cluster_loose1 = DBSCAN(eps=eps_loose, min_samples=4, metric='precomputed', n_jobs=-1)
+
+            print('Clustering criterion: eps: {:.3f}, eps_tight: {:.3f}, eps_loose: {:.3f}'.format(eps, eps_tight,
+                                                                                                   eps_loose))
+            cluster2 = DBSCAN(eps=eps, min_samples=4, metric='precomputed', n_jobs=-1)
+            cluster_tight2 = DBSCAN(eps=eps_tight, min_samples=4, metric='precomputed', n_jobs=-1)
+            cluster_loose2 = DBSCAN(eps=eps_loose, min_samples=4, metric='precomputed', n_jobs=-1)
+
 
         # select & cluster images as training set of this epochs
-        pseudo_labels = cluster.fit_predict(rerank_dist)
-        pseudo_labels_tight = cluster_tight.fit_predict(rerank_dist)
-        pseudo_labels_loose = cluster_loose.fit_predict(rerank_dist)
-        num_ids = len(set(pseudo_labels)) - (1 if -1 in pseudo_labels else 0)
-        num_ids_tight = len(set(pseudo_labels_tight)) - (1 if -1 in pseudo_labels_tight else 0)
-        num_ids_loose = len(set(pseudo_labels_loose)) - (1 if -1 in pseudo_labels_loose else 0)
+        pseudo_labels1 = cluster1.fit_predict(rerank_dist1)
+        pseudo_labels_tight1 = cluster_tight1.fit_predict(rerank_dist1)
+        pseudo_labels_loose1 = cluster_loose1.fit_predict(rerank_dist1)
+        num_ids1 = len(set(pseudo_labels1)) - (1 if -1 in pseudo_labels1 else 0)
+        num_ids_tight1 = len(set(pseudo_labels_tight1)) - (1 if -1 in pseudo_labels_tight1 else 0)
+        num_ids_loose1 = len(set(pseudo_labels_loose1)) - (1 if -1 in pseudo_labels_loose1 else 0)
+
+        pseudo_labels2 = cluster2.fit_predict(rerank_dist2)
+        pseudo_labels_tight2 = cluster_tight2.fit_predict(rerank_dist2)
+        pseudo_labels_loose2 = cluster_loose2.fit_predict(rerank_dist2)
+        num_ids2 = len(set(pseudo_labels2)) - (1 if -1 in pseudo_labels2 else 0)
+        num_ids_tight2 = len(set(pseudo_labels_tight2)) - (1 if -1 in pseudo_labels_tight2 else 0)
+        num_ids_loose2 = len(set(pseudo_labels_loose2)) - (1 if -1 in pseudo_labels_loose2 else 0)
 
         # generate new dataset and calculate cluster centers
         def generate_pseudo_labels(cluster_id, num):
@@ -186,63 +208,113 @@ def main_worker(args):
                     outliers += 1
             return torch.Tensor(labels).long()
 
-        pseudo_labels = generate_pseudo_labels(pseudo_labels, num_ids)
-        pseudo_labels_tight = generate_pseudo_labels(pseudo_labels_tight, num_ids_tight)
-        pseudo_labels_loose = generate_pseudo_labels(pseudo_labels_loose, num_ids_loose)
+        pseudo_labels1 = generate_pseudo_labels(pseudo_labels1, num_ids1)
+        pseudo_labels_tight1 = generate_pseudo_labels(pseudo_labels_tight1, num_ids_tight1)
+        pseudo_labels_loose1 = generate_pseudo_labels(pseudo_labels_loose1, num_ids_loose1)
+
+        pseudo_labels2 = generate_pseudo_labels(pseudo_labels2, num_ids2)
+        pseudo_labels_tight2 = generate_pseudo_labels(pseudo_labels_tight2, num_ids_tight2)
+        pseudo_labels_loose2 = generate_pseudo_labels(pseudo_labels_loose2, num_ids_loose2)
 
         # compute R_indep and R_comp
-        N = pseudo_labels.size(0)
-        label_sim = pseudo_labels.expand(N, N).eq(pseudo_labels.expand(N, N).t()).float()
-        label_sim_tight = pseudo_labels_tight.expand(N, N).eq(pseudo_labels_tight.expand(N, N).t()).float()
-        label_sim_loose = pseudo_labels_loose.expand(N, N).eq(pseudo_labels_loose.expand(N, N).t()).float()
+        N1 = pseudo_labels1.size(0)
+        label_sim1 = pseudo_labels1.expand(N1, N1).eq(pseudo_labels1.expand(N1, N1).t()).float()
+        label_sim_tight1 = pseudo_labels_tight1.expand(N1, N1).eq(pseudo_labels_tight1.expand(N1, N1).t()).float()
+        label_sim_loose1 = pseudo_labels_loose1.expand(N1, N1).eq(pseudo_labels_loose1.expand(N1, N1).t()).float()
+        N2 = pseudo_labels2.size(0)
+        label_sim2 = pseudo_labels2.expand(N2, N2).eq(pseudo_labels2.expand(N2, N2).t()).float()
+        label_sim_tight2 = pseudo_labels_tight2.expand(N2, N2).eq(pseudo_labels_tight2.expand(N2, N2).t()).float()
+        label_sim_loose2 = pseudo_labels_loose2.expand(N2, N2).eq(pseudo_labels_loose2.expand(N2, N2).t()).float()
 
-        R_comp = 1-torch.min(label_sim, label_sim_tight).sum(-1)/torch.max(label_sim, label_sim_tight).sum(-1)
-        R_indep = 1-torch.min(label_sim, label_sim_loose).sum(-1)/torch.max(label_sim, label_sim_loose).sum(-1)
-        assert((R_comp.min()>=0) and (R_comp.max()<=1))
-        assert((R_indep.min()>=0) and (R_indep.max()<=1))
+        R_comp1 = 1-torch.min(label_sim1, label_sim_tight1).sum(-1)/torch.max(label_sim1, label_sim_tight1).sum(-1)
+        R_indep1 = 1-torch.min(label_sim1, label_sim_loose1).sum(-1)/torch.max(label_sim1, label_sim_loose1).sum(-1)
+        assert((R_comp1.min()>=0) and (R_comp1.max()<=1))
+        assert((R_indep1.min()>=0) and (R_indep1.max()<=1))
+        R_comp2 = 1 - torch.min(label_sim2, label_sim_tight2).sum(-1) / torch.max(label_sim2, label_sim_tight2).sum(-1)
+        R_indep2 = 1 - torch.min(label_sim2, label_sim_loose2).sum(-1) / torch.max(label_sim2, label_sim_loose2).sum(-1)
+        assert ((R_comp2.min() >= 0) and (R_comp2.max() <= 1))
+        assert ((R_indep2.min() >= 0) and (R_indep2.max() <= 1))
 
-        cluster_R_comp, cluster_R_indep = collections.defaultdict(list), collections.defaultdict(list)
-        cluster_img_num = collections.defaultdict(int)
-        for i, (comp, indep, label) in enumerate(zip(R_comp, R_indep, pseudo_labels)):
-            cluster_R_comp[label.item()].append(comp.item())
-            cluster_R_indep[label.item()].append(indep.item())
-            cluster_img_num[label.item()]+=1
+        cluster_R_comp1, cluster_R_indep1 = collections.defaultdict(list), collections.defaultdict(list)
+        cluster_img_num1 = collections.defaultdict(int)
+        for i, (comp, indep, label) in enumerate(zip(R_comp1, R_indep1, pseudo_labels1)):
+            cluster_R_comp1[label.item()].append(comp.item())
+            cluster_R_indep1[label.item()].append(indep.item())
+            cluster_img_num1[label.item()]+=1
+        cluster_R_comp2, cluster_R_indep2 = collections.defaultdict(list), collections.defaultdict(list)
+        cluster_img_num2 = collections.defaultdict(int)
+        for i, (comp, indep, label) in enumerate(zip(R_comp2, R_indep2, pseudo_labels2)):
+            cluster_R_comp2[label.item()].append(comp.item())
+            cluster_R_indep2[label.item()].append(indep.item())
+            cluster_img_num2[label.item()] += 1
 
-        cluster_R_comp = [min(cluster_R_comp[i]) for i in sorted(cluster_R_comp.keys())]
-        cluster_R_indep = [min(cluster_R_indep[i]) for i in sorted(cluster_R_indep.keys())]
-        cluster_R_indep_noins = [iou for iou, num in zip(cluster_R_indep, sorted(cluster_img_num.keys())) if cluster_img_num[num]>1]
+        cluster_R_comp1 = [min(cluster_R_comp1[i]) for i in sorted(cluster_R_comp1.keys())]
+        cluster_R_indep1 = [min(cluster_R_indep1[i]) for i in sorted(cluster_R_indep1.keys())]
+        cluster_R_indep_noins1 = [iou for iou, num in zip(cluster_R_indep1, sorted(cluster_img_num1.keys())) if cluster_img_num1[num]>1]
         if (epoch==0):
-            indep_thres = np.sort(cluster_R_indep_noins)[min(len(cluster_R_indep_noins)-1,np.round(len(cluster_R_indep_noins)*0.9).astype('int'))]
+            indep_thres1 = np.sort(cluster_R_indep_noins1)[min(len(cluster_R_indep_noins1)-1,np.round(len(cluster_R_indep_noins1)*0.9).astype('int'))]
+        cluster_R_comp2 = [min(cluster_R_comp2[i]) for i in sorted(cluster_R_comp2.keys())]
+        cluster_R_indep2 = [min(cluster_R_indep2[i]) for i in sorted(cluster_R_indep2.keys())]
+        cluster_R_indep_noins2 = [iou for iou, num in zip(cluster_R_indep2, sorted(cluster_img_num2.keys())) if
+                                  cluster_img_num2[num] > 1]
+        if (epoch == 0):
+            indep_thres2 = np.sort(cluster_R_indep_noins2)[
+                min(len(cluster_R_indep_noins2) - 1, np.round(len(cluster_R_indep_noins2) * 0.9).astype('int'))]
 
-        pseudo_labeled_dataset = []
-        outliers = 0
-        for i, ((fname, _, cid), label) in enumerate(zip(sorted(dataset.train), pseudo_labels)):
-            indep_score = cluster_R_indep[label.item()]
-            comp_score = R_comp[i]
-            if ((indep_score<=indep_thres) and (comp_score.item()<=cluster_R_comp[label.item()])):
-                pseudo_labeled_dataset.append((fname,label.item(),cid))
+        pseudo_labeled_dataset1 = []
+        outliers1 = 0
+        for i, ((fname, _, cid), label) in enumerate(zip(sorted(dataset.train), pseudo_labels1)):
+            indep_score = cluster_R_indep1[label.item()]
+            comp_score = R_comp1[i]
+            if ((indep_score<=indep_thres1) and (comp_score.item()<=cluster_R_comp1[label.item()])):
+                pseudo_labeled_dataset1.append((fname,label.item(),cid))
             else:
-                pseudo_labeled_dataset.append((fname,len(cluster_R_indep)+outliers,cid))
-                pseudo_labels[i] = len(cluster_R_indep)+outliers
-                outliers+=1
+                pseudo_labeled_dataset1.append((fname,len(cluster_R_indep1)+outliers1,cid))
+                pseudo_labels1[i] = len(cluster_R_indep1)+outliers1
+                outliers1+=1
+        pseudo_labeled_dataset2 = []
+        outliers2 = 0
+        for i, ((fname, _, cid), label) in enumerate(zip(sorted(dataset.train), pseudo_labels2)):
+            indep_score = cluster_R_indep2[label.item()]
+            comp_score = R_comp2[i]
+            if ((indep_score <= indep_thres2) and (comp_score.item() <= cluster_R_comp2[label.item()])):
+                pseudo_labeled_dataset2.append((fname, label.item(), cid))
+            else:
+                pseudo_labeled_dataset2.append((fname, len(cluster_R_indep2) + outliers2, cid))
+                pseudo_labels2[i] = len(cluster_R_indep2) + outliers2
+                outliers2 += 1
 
         # statistics of clusters and un-clustered instances
         index2label = collections.defaultdict(int)
-        for label in pseudo_labels:
+        for label in pseudo_labels1:
             index2label[label.item()]+=1
         index2label = np.fromiter(index2label.values(), dtype=float)
         print('==> Statistics for epoch {}: {} clusters, {} un-clustered instances, R_indep threshold is {}'
-                    .format(epoch, (index2label>1).sum(), (index2label==1).sum(), 1-indep_thres))
+                    .format(epoch, (index2label>1).sum(), (index2label==1).sum(), 1-indep_thres1))
+        index2label = collections.defaultdict(int)
+        for label in pseudo_labels2:
+            index2label[label.item()] += 1
+        index2label = np.fromiter(index2label.values(), dtype=float)
+        print('==> Statistics for epoch {}: {} clusters, {} un-clustered instances, R_indep threshold is {}'
+              .format(epoch, (index2label > 1).sum(), (index2label == 1).sum(), 1 - indep_thres2))
 
-        memory.labels = pseudo_labels.cuda()
-        train_loader = get_train_loader(args, dataset, args.height, args.width,
+        memory1.labels = pseudo_labels1.cuda()
+        memory2.labels = pseudo_labels2.cuda()
+        train_loader1 = get_train_loader(args, dataset, args.height, args.width,
                                             args.batch_size, args.workers, args.num_instances, iters,
-                                            trainset=pseudo_labeled_dataset)
+                                            trainset=pseudo_labeled_dataset1)
+        train_loader2 = get_train_loader(args, dataset, args.height, args.width,
+                                         args.batch_size, args.workers, args.num_instances, iters,
+                                         trainset=pseudo_labeled_dataset2)
 
-        train_loader.new_epoch()
 
-        trainer.train(epoch, train_loader, optimizer,
-                    print_freq=args.print_freq, train_iters=len(train_loader))
+        train_loader1.new_epoch()
+        train_loader2.new_epoch()
+
+        trainer.train(epoch, train_loader1, train_loader2, optimizer,
+                    print_freq=args.print_freq, train_iters=len(train_loader1))
+        # trainer2.train(epoch, train_loader2, optimizer,
+        #                print_freq=args.print_freq, train_iters=len(train_loader2))
 
         if ((epoch+1)%args.eval_step==0 or (epoch==args.epochs-1)):
             mAP = evaluator.evaluate(test_loader, dataset.query, dataset.gallery, cmc_flag=False)
@@ -315,5 +387,5 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir', type=str, metavar='PATH',
                         default=osp.join(working_dir, 'data'))
     parser.add_argument('--logs-dir', type=str, metavar='PATH',
-                        default=osp.join(working_dir, 'logs/spcl_usl/duke_resnet50-ibn_slot_attention_100_ep_wo_gru_w_norm_on_dim1_w_pos_emb_2_times_update'))
+                        default=osp.join(working_dir, 'logs/spcl_usl/duke_resnet50-ibn_slot_attention_100_ep_2_branches_detach'))
     main()

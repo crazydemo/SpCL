@@ -62,22 +62,32 @@ class ResNetIBN(nn.Module):
 
             # Append new layers
             if self.has_embedding:
-                self.feat = nn.Linear(out_planes, self.num_features)
-                self.feat_bn = nn.BatchNorm1d(self.num_features)
-                init.kaiming_normal_(self.feat.weight, mode='fan_out')
-                init.constant_(self.feat.bias, 0)
+                self.feat1 = nn.Linear(out_planes, self.num_features)
+                self.feat2 = nn.Linear(out_planes, self.num_features)
+                self.feat_bn1 = nn.BatchNorm1d(self.num_features)
+                self.feat_bn2 = nn.BatchNorm1d(self.num_features)
+                init.kaiming_normal_(self.feat1.weight, mode='fan_out')
+                init.constant_(self.feat1.bias, 0)
+                init.kaiming_normal_(self.feat2.weight, mode='fan_out')
+                init.constant_(self.feat2.bias, 0)
             else:
                 # Change the num_features to CNN output channels
                 self.num_features = out_planes
-                self.feat_bn = nn.BatchNorm1d(self.num_features)
-            self.feat_bn.bias.requires_grad_(False)
+                self.feat_bn1 = nn.BatchNorm1d(self.num_features)
+                self.feat_bn2 = nn.BatchNorm1d(self.num_features)
+            self.feat_bn1.bias.requires_grad_(False)
+            self.feat_bn2.bias.requires_grad_(False)
             if self.dropout > 0:
                 self.drop = nn.Dropout(self.dropout)
             if self.num_classes > 0:
-                self.classifier = nn.Linear(self.num_features, self.num_classes, bias=False)
-                init.normal_(self.classifier.weight, std=0.001)
-        init.constant_(self.feat_bn.weight, 1)
-        init.constant_(self.feat_bn.bias, 0)
+                self.classifier1 = nn.Linear(self.num_features, self.num_classes, bias=False)
+                init.normal_(self.classifier1.weight, std=0.001)
+                self.classifier2 = nn.Linear(self.num_features, self.num_classes, bias=False)
+                init.normal_(self.classifier2.weight, std=0.001)
+        init.constant_(self.feat_bn1.weight, 1)
+        init.constant_(self.feat_bn1.bias, 0)
+        init.constant_(self.feat_bn2.weight, 1)
+        init.constant_(self.feat_bn2.bias, 0)
 
         # self.posemb = SoftPositionEmbed(self.num_features, (16, 8))
         self.slot_att = SlotAttention(8, self.num_features, hidden_dim=256)
@@ -94,45 +104,51 @@ class ResNetIBN(nn.Module):
             self.reset_params()
 
     def forward(self, x):
-        x = self.base(x)  # b, 2048, 16, 8
-        b, c, h, w = x.size()
+        x_ = self.base(x)  # b, 2048, 16, 8
+        b, c, h, w = x_.size()
 
-        # x = self.posemb(x)#b, c, 16, 8
-        # x = x.permute(0, 2, 3, 1)#b, h, w, c
-        # x = self.layernorm(x)
-        # x = x.permute(0, -1, 1, 2)
-        # x = self.mlp(x)
-        x = x.permute(0, 2, 3, 1)
-        x = x.view([b, h*w, c])
-        x = self.slot_att(x)
-        x = x.view(b, -1)
+        x = self.gap(x_)
+        x = x.view(x.size(0), -1)  # b, 2048
+
+        x_slot = x_.detach()
+        x_slot = x_slot.permute(0, 2, 3, 1)
+        x_slot = x_slot.view([b, h*w, c])
+        x_slot = self.slot_att(x_slot)
+        x_slot = x_slot.view(b, -1)
 
         if self.cut_at_pooling:
-            return x
+            return torch.cat([x, x_slot], 1)
 
         if self.has_embedding:
-            bn_x = self.feat_bn(self.feat(x))
+            bn_x1 = self.feat_bn1(self.feat1(x))
+            bn_x2 = self.feat_bn2(self.feat2(x_slot))
         else:
-            bn_x = self.feat_bn(x)  # b, 2048
+            bn_x1 = self.feat_bn1(x)
+            bn_x2 = self.feat_bn2(x_slot)
 
         if self.training is False:
-            bn_x = F.normalize(bn_x)
-            return bn_x
+            bn_x1 = F.normalize(bn_x1)
+            bn_x2 = F.normalize(bn_x2)
+            return torch.cat([bn_x1, bn_x2], 1)
 
         if self.norm:
-            bn_x = F.normalize(bn_x)
+            bn_x1 = F.normalize(bn_x1)
+            bn_x2 = F.normalize(bn_x2)
         elif self.has_embedding:
-            bn_x = F.relu(bn_x)
+            bn_x1 = F.relu(bn_x1)
+            bn_x2 = F.relu(bn_x2)
 
         if self.dropout > 0:
-            bn_x = self.drop(bn_x)
+            bn_x1 = self.drop(bn_x1)
+            bn_x2 = self.drop(bn_x2)
 
         if self.num_classes > 0:
-            prob = self.classifier(bn_x)
+            prob1 = self.classifier1(bn_x1)
+            prob2 = self.classifier2(bn_x2)
         else:
-            return bn_x
+            return torch.cat([bn_x1, bn_x2], 1)
 
-        return prob
+        return torch.cat([prob1, prob2], -1)
 
     def reset_params(self):
         for m in self.modules():
