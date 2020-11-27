@@ -130,6 +130,9 @@ def main_worker(args):
     memory2 = HybridMemory(model.module.num_features, len(dataset.train),
                            temp=args.temp, momentum=args.momentum).cuda()
 
+    checkpoint = load_checkpoint(osp.join('/media/ivy/research/SpCL/examples/logs/spcl_usl/duke_resnet50-ibn_slot_attention_100_ep_2_branches_detach', 'model_best.pth.tar'))
+    model.load_state_dict(checkpoint['state_dict'])
+
     # Initialize target-domain instance features
     print("==> Initialize instance features in the hybrid memory")
     cluster_loader = get_test_loader(dataset, args.height, args.width,
@@ -387,5 +390,5 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir', type=str, metavar='PATH',
                         default=osp.join(working_dir, 'data'))
     parser.add_argument('--logs-dir', type=str, metavar='PATH',
-                        default=osp.join(working_dir, 'logs/spcl_usl/duke_resnet50-ibn_slot_attention_100_ep_2_branches_detach_mutual_score_0.01'))
+                        default=osp.join(working_dir, 'logs/spcl_usl/duke_resnet50-ibn_slot_attention_100_ep_2_branches_detach_check_cluster'))
     main()

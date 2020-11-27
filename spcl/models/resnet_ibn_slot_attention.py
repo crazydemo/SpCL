@@ -5,7 +5,7 @@ from torch.nn import functional as F
 from torch.nn import init
 import torchvision
 import torch
-from .slot_attention_with_pos_emb import SoftPositionEmbed, SlotAttention
+from .slot_attention_with_sinkhorn import SoftPositionEmbed, SlotAttention
 
 from .resnet_ibn_a import resnet50_ibn_a, resnet101_ibn_a
 

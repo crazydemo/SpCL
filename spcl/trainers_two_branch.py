@@ -122,10 +122,20 @@ class SpCLTrainer_USL(object):
             f_out2 = self._forward(inputs2)
             f_out2 = f_out2[:, 2048:]
 
-            # compute loss with the hybrid memory
-            loss1 = self.memory1(f_out1, indexes1)
-            loss2 = self.memory2(f_out2, indexes2)
+            f_out1 = torch.cat([f_out1, 0.1*f_out1], 0)
+            f_out2 = torch.cat([f_out2, 0.1*f_out2], 0)
+            labels1 = torch.cat([indexes1, indexes2])
+            labels2 = torch.cat([indexes2, indexes1])
+
+            loss1 = self.memory1(f_out1, labels1)
+            loss2 = self.memory2(f_out2, labels2)
             loss = loss1+loss2
+            # compute loss with the hybrid memory
+            # loss1 = self.memory1(f_out1, indexes1)
+            # loss2 = self.memory2(f_out2, indexes2)
+            # loss3 = self.memory1(f_out1, indexes2)
+            # loss4 = self.memory2(f_out2, indexes1)
+            # loss = loss1+loss2+0.001*loss4#+0.001*loss3
 
             optimizer.zero_grad()
             loss.backward()

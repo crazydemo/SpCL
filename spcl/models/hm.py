@@ -25,7 +25,7 @@ class HM(autograd.Function):
             grad_inputs = grad_outputs.mm(ctx.features)
 
         # momentum update
-        for x, y in zip(inputs, indexes):
+        for x, y in zip(inputs[:inputs.size()[0]//2, :], indexes[:inputs.size()[0]//2]):
             ctx.features[y] = ctx.momentum * ctx.features[y] + (1. - ctx.momentum) * x
             ctx.features[y] /= ctx.features[y].norm()
 

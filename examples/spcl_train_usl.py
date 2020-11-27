@@ -315,5 +315,5 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir', type=str, metavar='PATH',
                         default=osp.join(working_dir, 'data'))
     parser.add_argument('--logs-dir', type=str, metavar='PATH',
-                        default=osp.join(working_dir, 'logs/spcl_usl/duke_resnet50-ibn_slot_attention_100_ep_wo_gru_w_norm_on_dim1_w_pos_emb_2_times_update'))
+                        default=osp.join(working_dir, 'logs/spcl_usl/duke_resnet50-ibn_slot_attention_100_ep_slot_with_sinkhorn'))
     main()
