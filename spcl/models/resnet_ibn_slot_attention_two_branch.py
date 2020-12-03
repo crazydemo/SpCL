@@ -93,10 +93,10 @@ class ResNetIBN(nn.Module):
         self.slot_att = SlotAttention(8, self.num_features, hidden_dim=256)
         self.layernorm = nn.LayerNorm(self.num_features)
         self.mlp = nn.Sequential(
-            nn.Conv2d(self.num_features, self.num_features//4, 1),
+            nn.Conv2d(self.num_features, self.num_features//4, 3),
             nn.BatchNorm2d(self.num_features//4),
             nn.ReLU(),
-            nn.Conv2d(self.num_features//4, self.num_features, 1))
+            nn.Conv2d(self.num_features//4, self.num_features, 3))
         self.mlp.apply(weights_init_kaiming)
         self.layernorm.apply(weights_init_kaiming)
 
@@ -111,9 +111,10 @@ class ResNetIBN(nn.Module):
         x = x.view(x.size(0), -1)  # b, 2048
 
         x_slot = x_.detach()
-        x_slot = x_slot.permute(0, 2, 3, 1)
-        x_slot = x_slot.view([b, h*w, c])
-        x_slot = self.slot_att(x_slot)
+        # x_slot = x_slot.permute(0, 2, 3, 1)
+        # x_slot = x_slot.view([b, h*w, c])
+        # x_slot = self.slot_att(x_slot)
+        x_slot = self.gap(self.mlp(x_slot))
         x_slot = x_slot.view(b, -1)
 
         if self.cut_at_pooling:
