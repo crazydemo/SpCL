@@ -97,7 +97,7 @@ class SpCLTrainer_USL(object):
         self.memory1 = memory1
         self.memory2 = memory2
 
-    def train(self, epoch, data_loader1, data_loader2, optimizer, print_freq=10, train_iters=400):
+    def train(self, epoch, data_loader, optimizer, print_freq=10, train_iters=400):
         self.encoder.train()
 
         batch_time = AverageMeter()
@@ -108,34 +108,25 @@ class SpCLTrainer_USL(object):
         end = time.time()
         for i in range(train_iters):
             # load data
-            inputs1 = data_loader1.next()
-            inputs2 = data_loader2.next()
+            inputs = data_loader.next()
             data_time.update(time.time() - end)
 
             # process inputs
-            inputs1, _, indexes1 = self._parse_data(inputs1)
-            inputs2, _, indexes2 = self._parse_data(inputs2)
+            inputs, _, indexes = self._parse_data(inputs)
 
             # forward
-            f_out1 = self._forward(inputs1)
-            f_out1 = f_out1[:,:2048]
-            f_out2 = self._forward(inputs2)
-            f_out2 = f_out2[:, 2048:]
+            f_out = self._forward(inputs)
+            f_out1 = f_out[:,:2048]
+            f_out2 = f_out[:, 2048:]
 
-            f_out1 = torch.cat([f_out1, 0.1*f_out1], 0)
-            f_out2 = torch.cat([f_out2, 0.1*f_out2], 0)
-            labels1 = torch.cat([indexes1, indexes2])
-            labels2 = torch.cat([indexes2, indexes1])
-
-            loss1 = self.memory1(f_out1, labels1)
-            loss2 = self.memory2(f_out2, labels2)
-            loss = loss1+loss2
-            # compute loss with the hybrid memory
-            # loss1 = self.memory1(f_out1, indexes1)
-            # loss2 = self.memory2(f_out2, indexes2)
-            # loss3 = self.memory1(f_out1, indexes2)
-            # loss4 = self.memory2(f_out2, indexes1)
-            # loss = loss1+loss2+0.001*loss4#+0.001*loss3
+            # loss1 = self.memory1(torch.cat([f_out1, f_out2], 0), torch.cat([indexes, indexes], 0))
+            # loss2 = self.memory2(torch.cat([f_out2, f_out1], 0), torch.cat([indexes, indexes], 0))
+            # loss = loss1 + loss2
+            loss1 = self.memory1(f_out1, indexes)
+            loss2 = self.memory1(f_out2, indexes, train=False)
+            loss3 = self.memory2(f_out2, indexes, train=False)
+            loss4 = self.memory2(f_out1, indexes)
+            loss = loss1 + 0.1*loss2 + loss3 + 0.1*loss4
 
             optimizer.zero_grad()
             loss.backward()
@@ -143,7 +134,6 @@ class SpCLTrainer_USL(object):
 
             losses.update(loss.item())
 
-            # print log
             batch_time.update(time.time() - end)
             end = time.time()
 
@@ -152,7 +142,7 @@ class SpCLTrainer_USL(object):
                       'Time {:.3f} ({:.3f})\t'
                       'Data {:.3f} ({:.3f})\t'
                       'Loss {:.3f} ({:.3f})'
-                      .format(epoch, i + 1, len(data_loader1),
+                      .format(epoch, i + 1, len(data_loader),
                               batch_time.val, batch_time.avg,
                               data_time.val, data_time.avg,
                               losses.val, losses.avg))

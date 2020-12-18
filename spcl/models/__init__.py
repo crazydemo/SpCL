@@ -4,6 +4,7 @@ from .resnet import *
 # from .resnet_ibn import *
 # from .resnet_ibn_slot_attention import *
 from .resnet_ibn_slot_attention_two_branch import *
+# from .simsiam_like_net import *
 
 
 __factory = {

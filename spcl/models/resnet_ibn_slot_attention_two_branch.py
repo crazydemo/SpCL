@@ -111,10 +111,10 @@ class ResNetIBN(nn.Module):
         x = x.view(x.size(0), -1)  # b, 2048
 
         x_slot = x_.detach()
-        # x_slot = x_slot.permute(0, 2, 3, 1)
-        # x_slot = x_slot.view([b, h*w, c])
-        # x_slot = self.slot_att(x_slot)
-        x_slot = self.gap(self.mlp(x_slot))
+        x_slot = x_slot.permute(0, 2, 3, 1)
+        x_slot = x_slot.view([b, h*w, c])
+        x_slot = self.slot_att(x_slot)
+        # x_slot = self.gap(self.mlp(x_slot))
         x_slot = x_slot.view(b, -1)
 
         if self.cut_at_pooling:
@@ -126,6 +126,7 @@ class ResNetIBN(nn.Module):
         else:
             bn_x1 = self.feat_bn1(x)
             bn_x2 = self.feat_bn2(x_slot)
+            # bn_x2 = x_slot
 
         if self.training is False:
             bn_x1 = F.normalize(bn_x1)

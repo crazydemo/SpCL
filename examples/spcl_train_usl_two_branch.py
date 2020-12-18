@@ -300,19 +300,14 @@ def main_worker(args):
 
         memory1.labels = pseudo_labels1.cuda()
         memory2.labels = pseudo_labels2.cuda()
-        train_loader1 = get_train_loader(args, dataset, args.height, args.width,
+        train_loader = get_train_loader(args, dataset, args.height, args.width,
                                             args.batch_size, args.workers, args.num_instances, iters,
                                             trainset=pseudo_labeled_dataset1)
-        train_loader2 = get_train_loader(args, dataset, args.height, args.width,
-                                         args.batch_size, args.workers, args.num_instances, iters,
-                                         trainset=pseudo_labeled_dataset2)
 
+        train_loader.new_epoch()
 
-        train_loader1.new_epoch()
-        train_loader2.new_epoch()
-
-        trainer.train(epoch, train_loader1, train_loader2, optimizer,
-                    print_freq=args.print_freq, train_iters=len(train_loader1))
+        trainer.train(epoch, train_loader, optimizer,
+                    print_freq=args.print_freq, train_iters=len(train_loader))
         # trainer2.train(epoch, train_loader2, optimizer,
         #                print_freq=args.print_freq, train_iters=len(train_loader2))
 
@@ -344,7 +339,7 @@ if __name__ == '__main__':
     # data
     parser.add_argument('-d', '--dataset', type=str, default='dukemtmc',
                         choices=datasets.names())
-    parser.add_argument('-b', '--batch-size', type=int, default=32)
+    parser.add_argument('-b', '--batch-size', type=int, default=64)
     parser.add_argument('-j', '--workers', type=int, default=4)
     parser.add_argument('--height', type=int, default=256, help="input height")
     parser.add_argument('--width', type=int, default=128, help="input width")
@@ -373,9 +368,9 @@ if __name__ == '__main__':
     parser.add_argument('--lr', type=float, default=0.00035,
                         help="learning rate")
     parser.add_argument('--weight-decay', type=float, default=5e-4)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--iters', type=int, default=400)
-    parser.add_argument('--step-size', type=int, default=40)
+    parser.add_argument('--step-size', type=int, default=20)
     # training configs
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--print-freq', type=int, default=10)
@@ -387,5 +382,5 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir', type=str, metavar='PATH',
                         default=osp.join(working_dir, 'data'))
     parser.add_argument('--logs-dir', type=str, metavar='PATH',
-                        default=osp.join(working_dir, 'logs/spcl_usl/duke_resnet50-ibn_slot_attention_100_ep_2_branches_detach_mutual_score_0.1_wo_slot_att'))
+                        default=osp.join(working_dir, 'logs/spcl_usl/dukemtmc/resnet50_ibn_baseline_two_branch_detach_correct_step_20_50'))
     main()
