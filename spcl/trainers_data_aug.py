@@ -112,11 +112,15 @@ class SpCLTrainer_USL(object):
             data_time.update(time.time() - end)
 
             # process inputs
-            inputs, _, indexes = self._parse_data(inputs)
+            x1, x2, _, indexes = self._parse_data(inputs)
 
             # forward
-            f_out = self._forward(inputs)
+            f_out = self._forward(x1)
             f_out1 = f_out[:,:2048]
+            # f_out2 = f_out[:, 2048:]
+
+            f_out = self._forward(x2)
+            # f_out1 = f_out[:, :2048]
             f_out2 = f_out[:, 2048:]
 
             # loss1 = self.memory1(torch.cat([f_out1, f_out2], 0), torch.cat([indexes, indexes], 0))
@@ -128,7 +132,6 @@ class SpCLTrainer_USL(object):
             loss4 = self.memory2(f_out1, indexes)
             loss = loss1 + 0.1*loss2 + loss3 + 0.1*loss4
 
-            torch.autograd.set_detect_anomaly(True)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
@@ -150,7 +153,8 @@ class SpCLTrainer_USL(object):
 
     def _parse_data(self, inputs):
         imgs, _, pids, _, indexes = inputs
-        return imgs.cuda(), pids.cuda(), indexes.cuda()
+        x1, x2 = imgs
+        return x1.cuda(), x2.cuda(), pids.cuda(), indexes.cuda()
 
     def _forward(self, inputs):
         return self.encoder(inputs)

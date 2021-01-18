@@ -3,8 +3,10 @@ from __future__ import absolute_import
 from torch import nn
 from torch.nn import functional as F
 from torch.nn import init
+import random
 import torchvision
 import torch
+from torchvision.models.resnet import Bottleneck
 from .slot_attention_with_pos_emb import SoftPositionEmbed, SlotAttention
 
 from .resnet_ibn_a import resnet50_ibn_a, resnet101_ibn_a
@@ -28,6 +30,25 @@ def weights_init_kaiming(m):
     elif classname.find('LayerNorm') != -1:
         nn.init.normal_(m.weight, 1.0, 0.02)
         nn.init.constant_(m.bias, 0.0)
+
+
+class BatchDrop(nn.Module):
+    def __init__(self, h_ratio, w_ratio):
+        super(BatchDrop, self).__init__()
+        self.h_ratio = h_ratio
+        self.w_ratio = w_ratio
+
+    def forward(self, x):
+        if self.training:
+            h, w = x.size()[-2:]
+            rh = round(self.h_ratio * h)
+            rw = round(self.w_ratio * w)
+            sx = random.randint(0, h - rh)
+            sy = random.randint(0, w - rw)
+            mask = x.new_ones(x.size())
+            mask[:, :, sx:sx + rh, sy:sy + rw] = 0
+            x = x * mask
+        return x
 
 class ResNetIBN(nn.Module):
     __factory = {
@@ -62,77 +83,101 @@ class ResNetIBN(nn.Module):
 
             # Append new layers
             if self.has_embedding:
-                self.feat = nn.Linear(out_planes, self.num_features)
-                self.feat_bn = nn.BatchNorm1d(self.num_features)
-                init.kaiming_normal_(self.feat.weight, mode='fan_out')
-                init.constant_(self.feat.bias, 0)
+                self.feat1 = nn.Linear(out_planes, self.num_features)
+                self.feat2 = nn.Linear(out_planes, self.num_features)
+                self.feat_bn1 = nn.BatchNorm1d(self.num_features)
+                self.feat_bn2 = nn.BatchNorm1d(self.num_features)
+                init.kaiming_normal_(self.feat1.weight, mode='fan_out')
+                init.constant_(self.feat1.bias, 0)
+                init.kaiming_normal_(self.feat2.weight, mode='fan_out')
+                init.constant_(self.feat2.bias, 0)
             else:
                 # Change the num_features to CNN output channels
                 self.num_features = out_planes
-                self.feat_bn = nn.BatchNorm1d(self.num_features)
-            self.feat_bn.bias.requires_grad_(False)
+                self.feat_bn1 = nn.BatchNorm1d(self.num_features)
+                self.feat_bn2 = nn.BatchNorm1d(self.num_features)
+            self.feat_bn1.bias.requires_grad_(False)
+            self.feat_bn2.bias.requires_grad_(False)
             if self.dropout > 0:
                 self.drop = nn.Dropout(self.dropout)
             if self.num_classes > 0:
-                self.classifier = nn.Linear(self.num_features, self.num_classes, bias=False)
-                init.normal_(self.classifier.weight, std=0.001)
-        init.constant_(self.feat_bn.weight, 1)
-        init.constant_(self.feat_bn.bias, 0)
+                self.classifier1 = nn.Linear(self.num_features, self.num_classes, bias=False)
+                init.normal_(self.classifier1.weight, std=0.001)
+                self.classifier2 = nn.Linear(self.num_features, self.num_classes, bias=False)
+                init.normal_(self.classifier2.weight, std=0.001)
+        init.constant_(self.feat_bn1.weight, 1)
+        init.constant_(self.feat_bn1.bias, 0)
+        init.constant_(self.feat_bn2.weight, 1)
+        init.constant_(self.feat_bn2.bias, 0)
 
         # self.posemb = SoftPositionEmbed(self.num_features, (16, 8))
-        self.slot_att = SlotAttention(8, self.num_features, hidden_dim=256)
-        self.layernorm = nn.LayerNorm(self.num_features)
-        self.mlp = nn.Sequential(
-            nn.Conv2d(self.num_features, self.num_features//4, 1),
-            nn.BatchNorm2d(self.num_features//4),
-            nn.ReLU(),
-            nn.Conv2d(self.num_features//4, self.num_features, 1))
-        self.mlp.apply(weights_init_kaiming)
-        self.layernorm.apply(weights_init_kaiming)
+        # self.slot_att = SlotAttention(8, self.num_features, hidden_dim=256)
+        # self.layernorm = nn.LayerNorm(self.num_features)
+        # self.mlp = nn.Sequential(
+        #     nn.Conv2d(self.num_features, self.num_features//4, 3),
+        #     nn.BatchNorm2d(self.num_features//4),
+        #     nn.ReLU(),
+        #     nn.Conv2d(self.num_features//4, self.num_features, 3))
+        # self.mlp.apply(weights_init_kaiming)
+        # self.layernorm.apply(weights_init_kaiming)
+
+        self.part_maxpool = nn.AdaptiveMaxPool2d((1, 1))
+        self.batch_crop = BatchDrop(0.33, 1.0)
+
+        self.res_part2 = Bottleneck(2048, 512)
 
         if not pretrained:
             self.reset_params()
 
     def forward(self, x):
-        x = self.base(x)  # b, 2048, 16, 8
-        b, c, h, w = x.size()
+        x_ = self.base(x)  # b, 2048, 16, 8
+        b, c, h, w = x_.size()
 
-        # x = self.posemb(x)#b, c, 16, 8
-        # x = x.permute(0, 2, 3, 1)#b, h, w, c
-        # x = self.layernorm(x)
-        # x = x.permute(0, -1, 1, 2)
-        # x = self.mlp(x)
-        x = x.permute(0, 2, 3, 1)
-        x = x.view([b, h*w, c])
-        x = self.slot_att(x)
-        x = x.view(b, -1)
+        x = self.gap(x_)
+        x = x.view(x.size(0), -1)  # b, 2048
+
+        x_bdb = x_.detach()
+        x_bdb = self.res_part2(x_bdb)
+        x_bdb = self.batch_crop(x_bdb)
+        # print(x_bdb.size())
+        x_bdb = self.part_maxpool(x_bdb)
+        x_bdb = x_bdb.view(x_bdb.size(0), -1)
+        # print(x_bdb.size())
 
         if self.cut_at_pooling:
-            return x
+            return torch.cat([x, x_bdb], 1)
 
         if self.has_embedding:
-            bn_x = self.feat_bn(self.feat(x))
+            bn_x1 = self.feat_bn1(self.feat1(x))
+            bn_x2 = self.feat_bn2(self.feat2(x_bdb))
         else:
-            bn_x = self.feat_bn(x)  # b, 2048
+            bn_x1 = self.feat_bn1(x)
+            bn_x2 = self.feat_bn2(x_bdb)
+            # bn_x2 = x_slot
 
         if self.training is False:
-            bn_x = F.normalize(bn_x)
-            return bn_x
+            bn_x1 = F.normalize(bn_x1)
+            bn_x2 = F.normalize(bn_x2)
+            return torch.cat([bn_x1, bn_x2], 1)
 
         if self.norm:
-            bn_x = F.normalize(bn_x)
+            bn_x1 = F.normalize(bn_x1)
+            bn_x2 = F.normalize(bn_x2)
         elif self.has_embedding:
-            bn_x = F.relu(bn_x)
+            bn_x1 = F.relu(bn_x1)
+            bn_x2 = F.relu(bn_x2)
 
         if self.dropout > 0:
-            bn_x = self.drop(bn_x)
+            bn_x1 = self.drop(bn_x1)
+            bn_x2 = self.drop(bn_x2)
 
         if self.num_classes > 0:
-            prob = self.classifier(bn_x)
+            prob1 = self.classifier1(bn_x1)
+            prob2 = self.classifier2(bn_x2)
         else:
-            return bn_x
+            return torch.cat([bn_x1, bn_x2], 1)
 
-        return prob
+        return torch.cat([prob1, prob2], -1)
 
     def reset_params(self):
         for m in self.modules():

@@ -5,7 +5,7 @@ from torch.nn import functional as F
 from torch.nn import init
 import torchvision
 import torch
-from .slot_attention_with_pos_emb import SoftPositionEmbed, SlotAttention
+from .axial_attention_raw import SoftPositionEmbed, SlotAttention
 
 from .resnet_ibn_a import resnet50_ibn_a, resnet101_ibn_a
 
@@ -80,7 +80,7 @@ class ResNetIBN(nn.Module):
         init.constant_(self.feat_bn.bias, 0)
 
         # self.posemb = SoftPositionEmbed(self.num_features, (16, 8))
-        self.slot_att = SlotAttention(8, self.num_features, hidden_dim=256)
+        self.slot_att = SlotAttention(8, self.num_features)
         self.layernorm = nn.LayerNorm(self.num_features)
         self.mlp = nn.Sequential(
             nn.Conv2d(self.num_features, self.num_features//4, 1),
@@ -97,15 +97,11 @@ class ResNetIBN(nn.Module):
         x = self.base(x)  # b, 2048, 16, 8
         b, c, h, w = x.size()
 
-        # x = self.posemb(x)#b, c, 16, 8
-        # x = x.permute(0, 2, 3, 1)#b, h, w, c
-        # x = self.layernorm(x)
-        # x = x.permute(0, -1, 1, 2)
-        # x = self.mlp(x)
         x = x.permute(0, 2, 3, 1)
         x = x.view([b, h*w, c])
-        x = self.slot_att(x)
-        x = x.view(b, -1)
+        x_ = self.slot_att(x)
+        x = x_+x
+        x = x.mean(1)
 
         if self.cut_at_pooling:
             return x

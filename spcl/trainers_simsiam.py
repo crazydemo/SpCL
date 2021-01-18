@@ -108,33 +108,46 @@ class SpCLTrainer_USL(object):
         end = time.time()
         for i in range(train_iters):
             # load data
-            inputs = data_loader.next()
+            inputs1 = data_loader.next()
             data_time.update(time.time() - end)
 
             # process inputs
-            inputs, _, indexes = self._parse_data(inputs)
+            x1, x2, _, indexes = self._parse_data(inputs1)
+
+            inputs = torch.cat([x1, x2], 0)
 
             # forward
+            '''image1'''
             f_out = self._forward(inputs)
-            f_out1 = f_out[:,:2048]
-            f_out2 = f_out[:, 2048:]
+            '''image1 with label1, 2; image2 with label1, 2'''
+            z11, p12, z21, p22 = f_out[:64, :2048], f_out[:64, 2048:], f_out[64:, :2048], f_out[64:, 2048:]
 
-            # loss1 = self.memory1(torch.cat([f_out1, f_out2], 0), torch.cat([indexes, indexes], 0))
-            # loss2 = self.memory2(torch.cat([f_out2, f_out1], 0), torch.cat([indexes, indexes], 0))
-            # loss = loss1 + loss2
-            loss1 = self.memory1(f_out1, indexes)
-            loss2 = self.memory1(f_out2, indexes, train=False)
-            loss3 = self.memory2(f_out2, indexes, train=False)
-            loss4 = self.memory2(f_out1, indexes)
-            loss = loss1 + 0.1*loss2 + loss3 + 0.1*loss4
+            '''for image1'''
+            loss1 = self.memory1(z11, indexes)
+            loss2 = self.memory2(z11, indexes, train=False)
+            loss3 = self.memory2(p12, indexes)
+            loss4 = self.memory1(p12, indexes, train=False)
+            loss_ml1 = loss1 + 0.1 * loss2 + loss3 + 0.1 * loss4
 
-            torch.autograd.set_detect_anomaly(True)
+            '''for image2'''
+            loss1 = self.memory1(z21, indexes)
+            loss2 = self.memory2(z21, indexes, train=False)
+            loss3 = self.memory2(p22, indexes)
+            loss4 = self.memory1(p22, indexes, train=False)
+            loss_ml2 = loss1 + 0.1 * loss2 + loss3 + 0.1 * loss4
+
+            '''mutual learning'''
+            loss_siam = -0.5*(p22*z11.detach()).sum(1).mean()-0.5*(p12*z21.detach()).sum(1).mean()
+
+            loss = 0.5 * loss_ml1 + 0.5*loss_ml2 + 1.0 *loss_siam
+
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
 
             losses.update(loss.item())
 
+            # print log
             batch_time.update(time.time() - end)
             end = time.time()
 
@@ -150,7 +163,8 @@ class SpCLTrainer_USL(object):
 
     def _parse_data(self, inputs):
         imgs, _, pids, _, indexes = inputs
-        return imgs.cuda(), pids.cuda(), indexes.cuda()
+        x1, x2 = imgs
+        return x1.cuda(), x2.cuda(), pids.cuda(), indexes.cuda()
 
     def _forward(self, inputs):
         return self.encoder(inputs)

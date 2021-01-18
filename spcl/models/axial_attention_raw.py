@@ -52,7 +52,7 @@ class SoftPositionEmbed(nn.Module):
 
 
 class SlotAttention(nn.Module):
-    def __init__(self, num_slots, dim, iters=3, eps=1e-8, hidden_dim=128):
+    def __init__(self, num_slots, dim, iters=3, eps=1e-8, hidden_dim=2048):
         super().__init__()
         self.num_slots = num_slots
         self.iters = iters
@@ -65,16 +65,17 @@ class SlotAttention(nn.Module):
 
         self.to_q = nn.Linear(hidden_dim, hidden_dim)
         self.to_k = nn.Linear(dim, hidden_dim)
-        self.to_v = nn.Linear(dim, hidden_dim)
+        self.to_v1 = nn.Linear(dim, hidden_dim)
+        self.to_v2 = nn.Linear(dim, hidden_dim)
 
         self.gru = nn.GRUCell(hidden_dim, hidden_dim)
 
         # hidden_dim = max(dim, hidden_dim)
 
         self.mlp = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim//2),
+            nn.Linear(hidden_dim*8, hidden_dim),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim//2, hidden_dim)
+            nn.Linear(hidden_dim, hidden_dim*8)
         )
 
         self.norm_input = nn.LayerNorm(dim)
@@ -87,15 +88,11 @@ class SlotAttention(nn.Module):
         b, n, d = inputs.shape
         n_s = num_slots if num_slots is not None else self.num_slots
 
-
-        # mu = self.slots_mu.expand(b, n_s, -1)
-        # sigma = self.slots_sigma.expand(b, n_s, -1)
-        # slots = torch.normal(mu, sigma)
         slots = self.slots.repeat(b, 1, 1)
         d = slots.shape[-1]
 
         inputs = self.norm_input(inputs)
-        k, v = self.to_k(inputs), self.to_v(inputs)
+        k, v1, v2 = self.to_k(inputs), self.to_v1(inputs), self.to_v2(inputs)
 
         for _ in range(1):#self.iters
             slots_prev = slots
@@ -103,27 +100,28 @@ class SlotAttention(nn.Module):
             slots = self.norm_slots(slots)
             q = self.to_q(slots)
 
-            dots = torch.einsum('bid,bjd->bij', q, k) * self.scale #b, k, h*w
-            attn_ = dots.softmax(dim=-1) + self.eps
-            attn = attn_ / attn_.sum(dim=1, keepdim=True)
+            dots_qk = torch.einsum('bid,bjd->bij', q, k) * self.scale #b, k, h*w
 
-            # select = attn_.sum(-1)
-            # tmp, select = select.sort(descending=True)
+            dots_kv1 = torch.einsum('bid,bjd->bij', k, v1) * self.scale  # b, h*w, h*w
 
-            updates = torch.einsum('bjd,bij->bid', v, attn) # b, k, d
+            dots_qk = dots_qk.repeat([1,16,1])
+            # print(dots_qk.size())
+            # print("dots_qk", dots_qk.size())
+            attn = dots_qk + dots_kv1
 
-            # slots = self.gru(
-            #     updates.reshape(-1, d),
-            #     slots_prev.reshape(-1, d)
-            # )
-            #
-            # slots = slots.reshape(b, -1, d)
-            # slots = slots + self.mlp(self.norm_pre_ff(updates))
-            slots = updates#F.normalize(updates, dim=1)
-            # out = F.normalize(slots, dim=1)
-            out = slots.reshape(b, -1) / n_s
+            attn = attn.softmax(dim=1) + self.eps
+            attn = attn / attn.sum(dim=-1, keepdim=True)
+            # print("attn", attn.size())
+            updates = torch.einsum('bij,bid->bjd', attn, v2) # b, hw, d
+            # print("updates", updates.size())
+            # updates = updates.permute(0, 2, 1, 3)
+            # b, hw, k, d = updates.size()
+            # print(b, hw, k, d)
+            # updates = updates.mean(1)
+            # updates = self.mlp(updates)
 
-        return out
+        return updates
+        # return inputs
 
     def reset_params(self):
         for m in self.modules():

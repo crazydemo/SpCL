@@ -27,7 +27,7 @@ class DukeMTMC(BaseImageDataset):
 
     def __init__(self, root, verbose=True, **kwargs):
         super(DukeMTMC, self).__init__()
-        self.dataset_dir = osp.join(root, self.dataset_dir)
+        self.dataset_dir = '/home/ubuntu/zy'
         self.dataset_url = 'http://vision.cs.duke.edu/DukeMTMC/data/misc/DukeMTMC-reID.zip'
         self.train_dir = osp.join(self.dataset_dir, 'DukeMTMC-reID/bounding_box_train')
         self.query_dir = osp.join(self.dataset_dir, 'DukeMTMC-reID/query')

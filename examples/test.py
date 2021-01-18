@@ -93,18 +93,19 @@ def main_worker(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Testing the model")
     # data
-    parser.add_argument('-d', '--dataset', type=str, required=True,
+    parser.add_argument('-d', '--dataset', type=str, default='dukemtmc',
                         choices=datasets.names())
     parser.add_argument('-b', '--batch-size', type=int, default=256)
     parser.add_argument('-j', '--workers', type=int, default=4)
     parser.add_argument('--height', type=int, default=256, help="input height")
     parser.add_argument('--width', type=int, default=128, help="input width")
     # model
-    parser.add_argument('-a', '--arch', type=str, required=True,
+    parser.add_argument('-a', '--arch', type=str, default='resnet_ibn50a',
                         choices=models.names())
     parser.add_argument('--features', type=int, default=0)
     parser.add_argument('--dropout', type=float, default=0)
-    parser.add_argument('--resume', type=str, required=True, metavar='PATH')
+    parser.add_argument('--resume', type=str, default='/home/ubuntu/zy/Sp/examples/logs/spcl_usl/dukemtmc/resnet50_ibn_baseline_two_branch_detach_correct_step_20_50/model_best.pth.tar'
+                            , metavar='PATH')
     # testing configs
     parser.add_argument('--rerank', action='store_true',
                         help="evaluation only")

@@ -19,8 +19,8 @@ import torch.nn.functional as F
 
 from spcl import datasets
 from spcl import models
-from spcl.models.hm_attention_on_center import HybridMemory
-from spcl.trainers_two_branch import SpCLTrainer_USL
+from spcl.models.hm import HybridMemory
+from spcl.trainers_simsiam import SpCLTrainer_USL
 from spcl.evaluators import Evaluator, extract_features
 from spcl.utils.data import IterLoader
 from spcl.utils.data import transforms as T
@@ -33,6 +33,25 @@ from spcl.utils.faiss_rerank import compute_jaccard_distance
 
 start_epoch = best_mAP = 0
 
+class SimSiamTransform():
+    def __init__(self, image_size):
+        normalizer = T.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225])
+        self.transform = T.Compose([
+            T.Resize((image_size[0], image_size[1]), interpolation=3),
+            T.RandomHorizontalFlip(p=0.5),
+            T.Pad(10),
+            T.RandomCrop((image_size[0], image_size[1])),
+            T.ToTensor(),
+            normalizer,
+            T.RandomErasing(probability=0.5, mean=[0.485, 0.456, 0.406])
+        ])
+
+    def __call__(self, x):
+        x1 = self.transform(x)
+        x2 = self.transform(x)
+        return x1, x2
+
 def get_data(name, data_dir):
     root = osp.join(data_dir, name)
     dataset = datasets.create(name, root)
@@ -41,17 +60,9 @@ def get_data(name, data_dir):
 def get_train_loader(args, dataset, height, width, batch_size, workers,
                     num_instances, iters, trainset=None):
 
-    normalizer = T.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225])
-    train_transformer = T.Compose([
-             T.Resize((height, width), interpolation=3),
-             T.RandomHorizontalFlip(p=0.5),
-             T.Pad(10),
-             T.RandomCrop((height, width)),
-             T.ToTensor(),
-             normalizer,
-	         T.RandomErasing(probability=0.5, mean=[0.485, 0.456, 0.406])
-         ])
+    # normalizer = T.Normalize(mean=[0.485, 0.456, 0.406],
+    #                          std=[0.229, 0.224, 0.225])
+    train_transformer = SimSiamTransform([height, width])
 
     train_set = sorted(dataset.train) if trainset is None else sorted(trainset)
     rmgs_flag = num_instances > 0
@@ -304,6 +315,7 @@ def main_worker(args):
                                             args.batch_size, args.workers, args.num_instances, iters,
                                             trainset=pseudo_labeled_dataset1)
 
+
         train_loader.new_epoch()
 
         trainer.train(epoch, train_loader, optimizer,
@@ -327,7 +339,7 @@ def main_worker(args):
         lr_scheduler.step()
 
     print ('==> Test with the best model:')
-    checkpoint = load_checkpoint(osp.join('/home/ubuntu/zy/Sp/examples/logs/spcl_usl/dukemtmc/resnet50_ibn_baseline_two_branch_detach_correct_step_20_50', 'model_best.pth.tar'))#args.logs_dir
+    checkpoint = load_checkpoint(osp.join(args.logs_dir, 'model_best.pth.tar'))
     model.load_state_dict(checkpoint['state_dict'])
     evaluator.evaluate(test_loader, dataset.query, dataset.gallery, cmc_flag=True)
 
@@ -362,19 +374,19 @@ if __name__ == '__main__':
                         choices=models.names())
     parser.add_argument('--features', type=int, default=0)
     parser.add_argument('--dropout', type=float, default=0)
-    parser.add_argument('--momentum', type=float, default=0.2,
+    parser.add_argument('--momentum', type=float, default=0.2,##0.2
                         help="update momentum for the hybrid memory")
     # optimizer
     parser.add_argument('--lr', type=float, default=0.00035,
                         help="learning rate")
     parser.add_argument('--weight-decay', type=float, default=5e-4)
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--iters', type=int, default=400)
-    parser.add_argument('--step-size', type=int, default=20)
+    parser.add_argument('--step-size', type=int, default=40)
     # training configs
     parser.add_argument('--seed', type=int, default=1)
     parser.add_argument('--print-freq', type=int, default=10)
-    parser.add_argument('--eval-step', type=int, default=10)
+    parser.add_argument('--eval-step', type=int, default=5)
     parser.add_argument('--temp', type=float, default=0.05,
                         help="temperature for scaling contrastive loss")
     # path
@@ -382,5 +394,5 @@ if __name__ == '__main__':
     parser.add_argument('--data-dir', type=str, metavar='PATH',
                         default=osp.join(working_dir, 'data'))
     parser.add_argument('--logs-dir', type=str, metavar='PATH',
-                        default=osp.join(working_dir, 'logs/spcl_usl/dukemtmc/resnet50_ibn_two_branch_detach_one_attention_on_center'))
+                        default=osp.join(working_dir, 'logs/spcl_usl/dukemtmc/ibn_two_branch_detatch_data_augmentation'))
     main()
